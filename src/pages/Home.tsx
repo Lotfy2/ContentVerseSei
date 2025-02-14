@@ -20,32 +20,53 @@ const Home = () => {
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const initializeDB = (): Promise<IDBDatabase> => {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('content_db', 1);
+
+      request.onerror = () => {
+        reject(new Error('Failed to open database'));
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains('files')) {
+          db.createObjectStore('files', { keyPath: 'id' });
+        }
+      };
+
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+    });
+  };
+
   const fetchContent = async () => {
     try {
-      const request = indexedDB.open('content_db', 1);
+      const db = await initializeDB();
       
-      request.onerror = () => {
-        setError('Failed to load content. Please try again.');
+      // Only proceed if the object store exists
+      if (!db.objectStoreNames.contains('files')) {
+        setContent([]);
         setLoading(false);
-      };
+        return;
+      }
 
-      request.onsuccess = async () => {
-        const db = request.result;
-        const transaction = db.transaction(['files'], 'readonly');
-        const store = transaction.objectStore('files');
-        const allContent = await new Promise<Content[]>((resolve, reject) => {
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
+      const transaction = db.transaction(['files'], 'readonly');
+      const store = transaction.objectStore('files');
+      
+      const allContent = await new Promise<Content[]>((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
 
-        const sortedContent = allContent.sort((a, b) => b.timestamp - a.timestamp);
-        setContent(sortedContent);
-        setLoading(false);
-      };
+      const sortedContent = allContent.sort((a, b) => b.timestamp - a.timestamp);
+      setContent(sortedContent);
     } catch (err) {
       console.error('Error fetching content:', err);
       setError('Failed to load content. Please try again.');
+    } finally {
       setLoading(false);
     }
   };
@@ -71,7 +92,7 @@ const Home = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-sei-primary" />
-        <p className="mt-2 text-black">
+        <p className="mt-2 text-white">
           {isDeleting ? 'Deleting files...' : 'Loading content...'}
         </p>
       </div>
@@ -81,14 +102,14 @@ const Home = () => {
   return (
     <div className="space-y-12">
       <div className="text-center space-y-6">
-        <h1 className="text-5xl font-bold text-black">
+        <h1 className="text-5xl font-bold sei-gradient-text">
           Multilingual Content Platform on Sei
         </h1>
-        <p className="text-xl text-black max-w-2xl mx-auto">
+        <p className="text-xl text-white max-w-2xl mx-auto">
           Create once, reach globally with AI-powered translations
         </p>
         {!address && (
-          <p className="text-black animate-pulse">
+          <p className="text-white animate-pulse">
             Connect your wallet to upload and manage content
           </p>
         )}
@@ -118,7 +139,7 @@ const Home = () => {
         </div>
       ) : content.length === 0 ? (
         <div className="sei-card p-12 text-center space-y-6">
-          <p className="text-black text-lg mb-4">No content available yet</p>
+          <p className="text-white text-lg mb-4">No content available yet</p>
           {address && (
             <Link to="/upload" className="sei-button inline-flex items-center">
               <Upload className="h-5 w-5 mr-2" />
@@ -148,14 +169,14 @@ const Home = () => {
                   ) : (
                     <FileText className="h-5 w-5 text-sei-primary" />
                   )}
-                  <h3 className="text-lg font-semibold text-black truncate">
+                  <h3 className="text-lg font-semibold text-white truncate">
                     {item.title || item.name}
                   </h3>
                 </div>
-                <p className="text-sm text-black">
+                <p className="text-sm text-white">
                   Type: {item.type.split('/')[0]}
                 </p>
-                <p className="text-xs text-black">
+                <p className="text-xs text-white">
                   Uploaded: {new Date(item.timestamp).toLocaleDateString()}
                 </p>
               </div>
