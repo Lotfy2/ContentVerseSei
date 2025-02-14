@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gradient-to-br from-sei-dark via-sei-dark-light to-sei-dark-lighter text-white min-h-screen;
+  }
+}
+
+@layer components {
+  .sei-card {
+    @apply bg-gradient-to-br from-sei-surface/30 to-sei-dark-lighter/30 backdrop-blur-xl border border-sei-primary/20 rounded-2xl shadow-xl hover:shadow-sei-primary/30 hover:border-sei-primary/40 transition-all duration-300;
+  }
+
+  .sei-button {
+    @apply px-6 py-3 bg-gradient-to-r from-sei-primary via-sei-accent to-sei-primary bg-[length:200%_100%] hover:bg-[100%_0] text-white font-medium rounded-xl transition-all duration-500 shadow-lg hover:shadow-sei-primary/50 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 relative overflow-hidden animate-pulse-glow;
+  }
+
+  .sei-input {
+    @apply w-full px-4 py-3 bg-sei-surface/40 border border-sei-primary/20 rounded-xl text-white placeholder-sei-muted focus:outline-none focus:ring-2 focus:ring-sei-primary/50 focus:border-transparent transition-all duration-300;
+  }
+
+  .sei-select {
+    @apply sei-input appearance-none bg-sei-surface/40 cursor-pointer;
+  }
+
+  .sei-gradient-text {
+    @apply bg-gradient-to-r from-sei-primary via-sei-accent to-sei-primary bg-clip-text text-transparent bg-[length:200%_auto] hover:bg-[100%_0] transition-all duration-500;
+  }
+
+  .sei-glass {
+    @apply bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl;
+  }
+
+  .sei-hover-card {
+    @apply transition-all duration-500 hover:scale-[1.02] hover:shadow-sei-primary/30;
+  }
+
+  .sei-content-grid {
+    @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6;
+  }
+
+  .sei-content-card {
+    @apply sei-card p-6 space-y-4 hover:sei-hover-card;
+  }
+
+  .sei-icon-container {
+    @apply h-12 w-12 rounded-xl bg-gradient-to-br from-sei-primary/20 to-sei-accent/20 flex items-center justify-center;
+  }
+
+  .sei-badge {
+    @apply px-3 py-1 text-xs font-medium bg-sei-primary/20 text-sei-highlight rounded-full;
+  }
+
+  .sei-heading {
+    @apply text-4xl font-bold sei-gradient-text mb-4;
+  }
+
+  .sei-subheading {
+    @apply text-xl text-sei-muted mb-8;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  @apply w-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-sei-surface;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gradient-to-b from-sei-primary to-sei-accent rounded-full;
+}
+
+/* Animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(124, 58, 237, 0.3); }
+  50% { box-shadow: 0 0 40px rgba(124, 58, 237, 0.6); }
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite;
+}
+
+.animate-gradient {
+  background-size: 200% auto;
+  animation: gradient 8s linear infinite;
+}
+
+@keyframes gradient {
+  0% { background-position: 0% center; }
+  50% { background-position: 100% center; }
+  100% { background-position: 0% center; }
+}
