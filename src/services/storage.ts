@@ -14,19 +14,58 @@ const initDB = (): Promise<IDBDatabase> => {
 
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      db = request.result;
-      resolve(request.result);
+    request.onerror = () => {
+      console.error('Failed to open database:', request.error);
+      reject(new Error('Failed to open database'));
+    };
+
+    request.onblocked = () => {
+      console.error('Database blocked. Please close other tabs and try again.');
+      reject(new Error('Database blocked'));
     };
 
     request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { 
+      console.log('Database upgrade needed. Creating object store...');
+      const database = (event.target as IDBOpenDBRequest).result;
+      
+      // Create the object store if it doesn't exist
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.createObjectStore(STORE_NAME, { 
           keyPath: 'id',
           autoIncrement: false
         });
+        console.log('Object store created successfully');
+      }
+    };
+
+    request.onsuccess = () => {
+      db = request.result;
+      
+      // Ensure the object store exists
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        // Close the database and increment the version to trigger onupgradeneeded
+        db.close();
+        const newRequest = indexedDB.open(DB_NAME, DB_VERSION + 1);
+        
+        newRequest.onupgradeneeded = (event) => {
+          const database = (event.target as IDBOpenDBRequest).result;
+          database.createObjectStore(STORE_NAME, { 
+            keyPath: 'id',
+            autoIncrement: false
+          });
+        };
+        
+        newRequest.onsuccess = () => {
+          db = newRequest.result;
+          resolve(db);
+        };
+        
+        newRequest.onerror = () => {
+          console.error('Failed to upgrade database:', newRequest.error);
+          reject(new Error('Failed to upgrade database'));
+        };
+      } else {
+        resolve(db);
       }
     };
   });
@@ -70,24 +109,48 @@ export const uploadFile = async (
       reader.readAsArrayBuffer(file);
     });
 
-    // Store file in IndexedDB
+    // Ensure database is initialized
     const database = await initDB();
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
+    
+    // Store file in IndexedDB with retry mechanism
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction([STORE_NAME], 'readwrite');
+          
+          transaction.onerror = () => {
+            console.error('Transaction error:', transaction.error);
+            reject(transaction.error);
+          };
+          
+          const store = transaction.objectStore(STORE_NAME);
+          
+          const request = store.put({
+            id: fileId,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            data: arrayBuffer,
+            timestamp: Date.now()
+          });
 
-      const request = store.put({
-        id: fileId,
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        data: arrayBuffer,
-        timestamp: Date.now()
-      });
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+        });
+        
+        break; // Success, exit retry loop
+      } catch (error) {
+        retryCount++;
+        if (retryCount === maxRetries) {
+          throw error;
+        }
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
 
     onProgress?.(100);
     return fileId;
@@ -102,6 +165,12 @@ export const getFile = async (fileId: string): Promise<Blob | null> => {
     const database = await initDB();
     const data = await new Promise<any>((resolve, reject) => {
       const transaction = database.transaction([STORE_NAME], 'readonly');
+      
+      transaction.onerror = () => {
+        console.error('Transaction error:', transaction.error);
+        reject(transaction.error);
+      };
+      
       const store = transaction.objectStore(STORE_NAME);
       const request = store.get(fileId);
 
@@ -122,6 +191,12 @@ export const deleteAllExceptOne = async (): Promise<void> => {
   try {
     const database = await initDB();
     const transaction = database.transaction([STORE_NAME], 'readwrite');
+    
+    transaction.onerror = () => {
+      console.error('Transaction error:', transaction.error);
+      throw transaction.error;
+    };
+    
     const store = transaction.objectStore(STORE_NAME);
 
     // Get all files
