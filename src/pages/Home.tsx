@@ -19,34 +19,43 @@ const Home = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   const initializeDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('content_db', 1);
+      try {
+        const request = indexedDB.open('content_db', 2); // Match the version in storage.ts
 
-      request.onerror = () => {
-        reject(new Error('Failed to open database'));
-      };
+        request.onerror = () => {
+          console.error('Database error:', request.error);
+          reject(new Error('Failed to open database'));
+        };
 
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains('files')) {
-          db.createObjectStore('files', { keyPath: 'id' });
-        }
-      };
+        request.onupgradeneeded = (event) => {
+          const db = (event.target as IDBOpenDBRequest).result;
+          if (!db.objectStoreNames.contains('files')) {
+            db.createObjectStore('files', { keyPath: 'id' });
+          }
+        };
 
-      request.onsuccess = () => {
-        resolve(request.result);
-      };
+        request.onsuccess = () => {
+          resolve(request.result);
+        };
+      } catch (error) {
+        console.error('Critical database error:', error);
+        reject(error);
+      }
     });
   };
 
   const fetchContent = async () => {
     try {
+      setError(null);
       const db = await initializeDB();
       
-      // Only proceed if the object store exists
+      // Verify the object store exists
       if (!db.objectStoreNames.contains('files')) {
+        console.log('Files store not found, creating empty content list');
         setContent([]);
         setLoading(false);
         return;
@@ -57,8 +66,15 @@ const Home = () => {
       
       const allContent = await new Promise<Content[]>((resolve, reject) => {
         const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        
+        request.onsuccess = () => {
+          resolve(request.result || []);
+        };
+        
+        request.onerror = () => {
+          console.error('Error fetching content:', request.error);
+          reject(new Error('Failed to fetch content'));
+        };
       });
 
       const sortedContent = allContent.sort((a, b) => b.timestamp - a.timestamp);
@@ -66,6 +82,13 @@ const Home = () => {
     } catch (err) {
       console.error('Error fetching content:', err);
       setError('Failed to load content. Please try again.');
+      
+      // Retry logic
+      if (retryCount < 3) {
+        console.log(`Retrying fetch attempt ${retryCount + 1}/3`);
+        setRetryCount(prev => prev + 1);
+        setTimeout(fetchContent, 1000); // Retry after 1 second
+      }
     } finally {
       setLoading(false);
     }
@@ -73,11 +96,12 @@ const Home = () => {
 
   useEffect(() => {
     fetchContent();
-  }, []);
+  }, [retryCount]);
 
   const handleDeleteFiles = async () => {
     try {
       setIsDeleting(true);
+      setError(null);
       await deleteAllExceptOne();
       await fetchContent();
     } catch (err) {
@@ -86,6 +110,13 @@ const Home = () => {
     } finally {
       setIsDeleting(false);
     }
+  };
+
+  const handleRetry = () => {
+    setLoading(true);
+    setError(null);
+    setRetryCount(0);
+    fetchContent();
   };
 
   if (loading || isDeleting) {
@@ -128,10 +159,10 @@ const Home = () => {
       )}
 
       {error ? (
-        <div className="sei-card p-8 text-center">
+        <div className="sei-card p-8 text-center space-y-4">
           <p className="text-red-400 mb-4">{error}</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={handleRetry}
             className="sei-button !bg-gradient-to-r !from-red-500 !to-red-600"
           >
             Retry
