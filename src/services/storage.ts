@@ -1,82 +1,50 @@
 // Using IndexedDB for file storage
 const DB_NAME = 'content_db';
 const STORE_NAME = 'files';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Increment version to force upgrade
 
 let db: IDBDatabase | null = null;
 
 const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     try {
-      // Close any existing database connection
-      if (db) {
-        db.close();
-        db = null;
-      }
-
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onerror = (event) => {
-        console.error('Database error:', request.error);
-        reject(new Error(`Failed to open database: ${request.error?.message || 'Unknown error'}`));
+      // Delete the existing database to ensure clean state
+      const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
+      
+      deleteRequest.onerror = () => {
+        console.error('Error deleting database:', deleteRequest.error);
       };
-
-      request.onblocked = () => {
-        console.error('Database blocked. Please close other tabs and try again.');
-        reject(new Error('Database blocked. Please close other tabs and try again.'));
-      };
-
-      request.onupgradeneeded = (event) => {
-        console.log('Upgrading database...');
-        const database = (event.target as IDBOpenDBRequest).result;
+      
+      deleteRequest.onsuccess = () => {
+        console.log('Successfully deleted database');
         
-        // Delete the old object store if it exists
-        if (database.objectStoreNames.contains(STORE_NAME)) {
-          database.deleteObjectStore(STORE_NAME);
-        }
+        // Create new database
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        // Create a new object store
-        database.createObjectStore(STORE_NAME, { 
-          keyPath: 'id',
-          autoIncrement: false
-        });
-        console.log('Object store created successfully');
-      };
-
-      request.onsuccess = () => {
-        db = request.result;
-
-        // Handle database connection errors
-        db.onerror = (event) => {
-          console.error('Database error:', (event.target as IDBDatabase).error);
+        request.onerror = (event) => {
+          console.error('Database error:', request.error);
+          reject(new Error(`Failed to open database: ${request.error?.message || 'Unknown error'}`));
         };
 
-        // Verify object store exists
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.close();
-          // Increment version to trigger upgrade
-          const reopenRequest = indexedDB.open(DB_NAME, DB_VERSION + 1);
+        request.onupgradeneeded = (event) => {
+          console.log('Creating new database...');
+          const database = (event.target as IDBOpenDBRequest).result;
           
-          reopenRequest.onupgradeneeded = (event) => {
-            const database = (event.target as IDBOpenDBRequest).result;
+          // Create the object store
+          if (!database.objectStoreNames.contains(STORE_NAME)) {
             database.createObjectStore(STORE_NAME, { 
               keyPath: 'id',
               autoIncrement: false
             });
-          };
-          
-          reopenRequest.onsuccess = () => {
-            db = reopenRequest.result;
-            resolve(db);
-          };
-          
-          reopenRequest.onerror = () => {
-            console.error('Failed to upgrade database:', reopenRequest.error);
-            reject(new Error(`Failed to upgrade database: ${reopenRequest.error?.message || 'Unknown error'}`));
-          };
-        } else {
+            console.log('Object store created successfully');
+          }
+        };
+
+        request.onsuccess = () => {
+          db = request.result;
+          console.log('Database initialized successfully');
           resolve(db);
-        }
+        };
       };
     } catch (error) {
       console.error('Critical database error:', error);
@@ -123,63 +91,30 @@ export const uploadFile = async (
       reader.readAsArrayBuffer(file);
     });
 
-    // Initialize database with retry mechanism
-    let database: IDBDatabase | null = null;
-    const maxRetries = 3;
-    let retryCount = 0;
+    // Initialize database
+    const database = await initDB();
 
-    while (retryCount < maxRetries && !database) {
+    // Store file
+    await new Promise<void>((resolve, reject) => {
       try {
-        database = await initDB();
-      } catch (error) {
-        retryCount++;
-        if (retryCount === maxRetries) {
-          throw new Error('Failed to initialize database after multiple attempts');
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-      }
-    }
-
-    if (!database) {
-      throw new Error('Failed to initialize database');
-    }
-
-    // Store file with retry mechanism
-    retryCount = 0;
-    while (retryCount < maxRetries) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const transaction = database!.transaction([STORE_NAME], 'readwrite');
-          
-          transaction.onerror = () => {
-            console.error('Transaction error:', transaction.error);
-            reject(new Error(`Transaction failed: ${transaction.error?.message || 'Unknown error'}`));
-          };
-          
-          const store = transaction.objectStore(STORE_NAME);
-          
-          const request = store.put({
-            id: fileId,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            data: arrayBuffer,
-            timestamp: Date.now()
-          });
-
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+        const transaction = database.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
         
-        break; // Success, exit retry loop
+        const request = store.put({
+          id: fileId,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          data: arrayBuffer,
+          timestamp: Date.now()
+        });
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
       } catch (error) {
-        retryCount++;
-        if (retryCount === maxRetries) {
-          throw error;
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        reject(error);
       }
-    }
+    });
 
     onProgress?.(100);
     return fileId;
@@ -193,18 +128,16 @@ export const getFile = async (fileId: string): Promise<Blob | null> => {
   try {
     const database = await initDB();
     const data = await new Promise<any>((resolve, reject) => {
-      const transaction = database.transaction([STORE_NAME], 'readonly');
-      
-      transaction.onerror = () => {
-        console.error('Transaction error:', transaction.error);
-        reject(new Error(`Failed to retrieve file: ${transaction.error?.message || 'Unknown error'}`));
-      };
-      
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(fileId);
+      try {
+        const transaction = database.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(fileId);
 
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      } catch (error) {
+        reject(error);
+      }
     });
 
     if (!data) return null;
@@ -220,12 +153,6 @@ export const deleteAllExceptOne = async (): Promise<void> => {
   try {
     const database = await initDB();
     const transaction = database.transaction([STORE_NAME], 'readwrite');
-    
-    transaction.onerror = () => {
-      console.error('Transaction error:', transaction.error);
-      throw new Error(`Failed to delete files: ${transaction.error?.message || 'Unknown error'}`);
-    };
-    
     const store = transaction.objectStore(STORE_NAME);
 
     // Get all files
