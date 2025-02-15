@@ -7,67 +7,81 @@ let db: IDBDatabase | null = null;
 
 const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
-    if (db) {
-      resolve(db);
-      return;
-    }
+    try {
+      // Close any existing database connection
+      if (db) {
+        db.close();
+        db = null;
+      }
 
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-    request.onerror = () => {
-      console.error('Failed to open database:', request.error);
-      reject(new Error('Failed to open database'));
-    };
+      request.onerror = (event) => {
+        console.error('Database error:', request.error);
+        reject(new Error(`Failed to open database: ${request.error?.message || 'Unknown error'}`));
+      };
 
-    request.onblocked = () => {
-      console.error('Database blocked. Please close other tabs and try again.');
-      reject(new Error('Database blocked'));
-    };
+      request.onblocked = () => {
+        console.error('Database blocked. Please close other tabs and try again.');
+        reject(new Error('Database blocked. Please close other tabs and try again.'));
+      };
 
-    request.onupgradeneeded = (event) => {
-      console.log('Database upgrade needed. Creating object store...');
-      const database = (event.target as IDBOpenDBRequest).result;
-      
-      // Create the object store if it doesn't exist
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
+      request.onupgradeneeded = (event) => {
+        console.log('Upgrading database...');
+        const database = (event.target as IDBOpenDBRequest).result;
+        
+        // Delete the old object store if it exists
+        if (database.objectStoreNames.contains(STORE_NAME)) {
+          database.deleteObjectStore(STORE_NAME);
+        }
+
+        // Create a new object store
         database.createObjectStore(STORE_NAME, { 
           keyPath: 'id',
           autoIncrement: false
         });
         console.log('Object store created successfully');
-      }
-    };
+      };
 
-    request.onsuccess = () => {
-      db = request.result;
-      
-      // Ensure the object store exists
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        // Close the database and increment the version to trigger onupgradeneeded
-        db.close();
-        const newRequest = indexedDB.open(DB_NAME, DB_VERSION + 1);
-        
-        newRequest.onupgradeneeded = (event) => {
-          const database = (event.target as IDBOpenDBRequest).result;
-          database.createObjectStore(STORE_NAME, { 
-            keyPath: 'id',
-            autoIncrement: false
-          });
+      request.onsuccess = () => {
+        db = request.result;
+
+        // Handle database connection errors
+        db.onerror = (event) => {
+          console.error('Database error:', (event.target as IDBDatabase).error);
         };
-        
-        newRequest.onsuccess = () => {
-          db = newRequest.result;
+
+        // Verify object store exists
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.close();
+          // Increment version to trigger upgrade
+          const reopenRequest = indexedDB.open(DB_NAME, DB_VERSION + 1);
+          
+          reopenRequest.onupgradeneeded = (event) => {
+            const database = (event.target as IDBOpenDBRequest).result;
+            database.createObjectStore(STORE_NAME, { 
+              keyPath: 'id',
+              autoIncrement: false
+            });
+          };
+          
+          reopenRequest.onsuccess = () => {
+            db = reopenRequest.result;
+            resolve(db);
+          };
+          
+          reopenRequest.onerror = () => {
+            console.error('Failed to upgrade database:', reopenRequest.error);
+            reject(new Error(`Failed to upgrade database: ${reopenRequest.error?.message || 'Unknown error'}`));
+          };
+        } else {
           resolve(db);
-        };
-        
-        newRequest.onerror = () => {
-          console.error('Failed to upgrade database:', newRequest.error);
-          reject(new Error('Failed to upgrade database'));
-        };
-      } else {
-        resolve(db);
-      }
-    };
+        }
+      };
+    } catch (error) {
+      console.error('Critical database error:', error);
+      reject(new Error('Failed to initialize database. Please refresh the page and try again.'));
+    }
   });
 };
 
@@ -109,21 +123,37 @@ export const uploadFile = async (
       reader.readAsArrayBuffer(file);
     });
 
-    // Ensure database is initialized
-    const database = await initDB();
-    
-    // Store file in IndexedDB with retry mechanism
+    // Initialize database with retry mechanism
+    let database: IDBDatabase | null = null;
     const maxRetries = 3;
     let retryCount = 0;
-    
+
+    while (retryCount < maxRetries && !database) {
+      try {
+        database = await initDB();
+      } catch (error) {
+        retryCount++;
+        if (retryCount === maxRetries) {
+          throw new Error('Failed to initialize database after multiple attempts');
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
+
+    if (!database) {
+      throw new Error('Failed to initialize database');
+    }
+
+    // Store file with retry mechanism
+    retryCount = 0;
     while (retryCount < maxRetries) {
       try {
         await new Promise<void>((resolve, reject) => {
-          const transaction = database.transaction([STORE_NAME], 'readwrite');
+          const transaction = database!.transaction([STORE_NAME], 'readwrite');
           
           transaction.onerror = () => {
             console.error('Transaction error:', transaction.error);
-            reject(transaction.error);
+            reject(new Error(`Transaction failed: ${transaction.error?.message || 'Unknown error'}`));
           };
           
           const store = transaction.objectStore(STORE_NAME);
@@ -147,7 +177,6 @@ export const uploadFile = async (
         if (retryCount === maxRetries) {
           throw error;
         }
-        // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
       }
     }
@@ -168,7 +197,7 @@ export const getFile = async (fileId: string): Promise<Blob | null> => {
       
       transaction.onerror = () => {
         console.error('Transaction error:', transaction.error);
-        reject(transaction.error);
+        reject(new Error(`Failed to retrieve file: ${transaction.error?.message || 'Unknown error'}`));
       };
       
       const store = transaction.objectStore(STORE_NAME);
@@ -194,7 +223,7 @@ export const deleteAllExceptOne = async (): Promise<void> => {
     
     transaction.onerror = () => {
       console.error('Transaction error:', transaction.error);
-      throw transaction.error;
+      throw new Error(`Failed to delete files: ${transaction.error?.message || 'Unknown error'}`);
     };
     
     const store = transaction.objectStore(STORE_NAME);
